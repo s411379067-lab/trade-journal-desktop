@@ -1187,8 +1187,31 @@
       grid.appendChild(cell);
     }
 
-    const monthTrades = Array.from(map.values()).reduce((acc, v) => acc + v.trades.length, 0);
-    if(summary) summary.textContent = `當月 ${monthTrades} 筆 • 月損益 ${fmtDayPnl(monthSum)}`;
+    // Monthly aggregates for summary
+    const valsArr = Array.from(map.values());
+    const monthTrades = valsArr.reduce((acc, v) => acc + (v.count || v.trades.length || 0), 0);
+    const monthWins = valsArr.reduce((acc, v) => acc + (v.wins || 0), 0);
+    const monthLosses = valsArr.reduce((acc, v) => acc + (v.losses || 0), 0);
+    const monthWr = monthTrades ? ((monthWins / monthTrades) * 100) : 0;
+    // Profit Factor: sum of wins over abs sum of losses, computed per trade
+    let posSum = 0, negSum = 0;
+    valsArr.forEach(v => {
+      (v.trades || []).forEach(t => {
+        const tv = Number(tradeValueForCalendar(t, calendarBase)) || 0;
+        if(tv > 0) posSum += tv; else if(tv < 0) negSum += Math.abs(tv);
+      });
+    });
+    let pfStr = '—';
+    if(negSum > 0 && posSum >= 0){
+      const pf = posSum / negSum;
+      pfStr = Number.isFinite(pf) ? pf.toFixed(2) : '∞';
+    } else if(posSum > 0 && negSum === 0){
+      pfStr = '∞';
+    } else if(posSum === 0 && negSum === 0){
+      pfStr = '0.00';
+    }
+    if(summary) summary.innerHTML = `T ${monthTrades}｜W ${monthWins}｜L ${monthLosses}｜Winrate ${monthWr.toFixed(1)}%`
+      + `<br>月損益 ${fmtDayPnl(monthSum)}｜PF ${pfStr}`;
     renderCalendarChart(map);
   }
 
