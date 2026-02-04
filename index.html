@@ -569,7 +569,7 @@
     text:   ['contains','doesnt_contain','eq'],
     number: ['lt','gt','eq'],
     date:   ['on','before','after','between'],
-    time:   ['eq','contains'],
+    time:   ['lt','gt','eq','between','contains'],
     select: ['eq'],
     multi:  ['contains','doesnt_contain']
   };
@@ -754,6 +754,39 @@
           d.value = String(r.values[0] || '');
           optWrap.appendChild(d);
         }
+      } else if(meta.type === 'time'){
+        if(r.op === 'between'){
+          optWrap.style.display = 'flex';
+          optWrap.style.gap = '8px';
+          optWrap.style.alignItems = 'center';
+
+          const t1 = document.createElement('input');
+          t1.type = 'time';
+          t1.className = 'timeFrom';
+          t1.dataset.i = String(i);
+          t1.value = String(r.values[0] || '');
+
+          const mid = document.createElement('span');
+          mid.className = 'muted';
+          mid.textContent = 'to';
+
+          const t2 = document.createElement('input');
+          t2.type = 'time';
+          t2.className = 'timeTo';
+          t2.dataset.i = String(i);
+          t2.value = String(r.values[1] || '');
+
+          optWrap.appendChild(t1);
+          optWrap.appendChild(mid);
+          optWrap.appendChild(t2);
+        } else {
+          const t = document.createElement('input');
+          t.type = 'time';
+          t.className = 'singleTime';
+          t.dataset.i = String(i);
+          t.value = String(r.values[0] || '');
+          optWrap.appendChild(t);
+        }
       } else {
         const inp = document.createElement('input');
         inp.className = 'singleInp';
@@ -849,6 +882,33 @@
         setBetween(i, from, to);
       });
     });
+
+    document.querySelectorAll('.singleTime').forEach(el => {
+      el.addEventListener('change', (e) => {
+        const i = Number(e.target.dataset.i);
+        setSingle(i, e.target.value);
+      });
+    });
+
+    document.querySelectorAll('.timeFrom').forEach(el => {
+      el.addEventListener('change', (e) => {
+        const i = Number(e.target.dataset.i);
+        const from = e.target.value;
+        const toEl = document.querySelector('.timeTo[data-i="' + i + '"]');
+        const to = toEl ? toEl.value : '';
+        setBetween(i, from, to);
+      });
+    });
+
+    document.querySelectorAll('.timeTo').forEach(el => {
+      el.addEventListener('change', (e) => {
+        const i = Number(e.target.dataset.i);
+        const to = e.target.value;
+        const fromEl = document.querySelector('.timeFrom[data-i="' + i + '"]');
+        const from = fromEl ? fromEl.value : '';
+        setBetween(i, from, to);
+      });
+    });
   }
 
   function normalizeMultiCellValue(v){
@@ -889,6 +949,38 @@
             const hi = Math.max(q1.getTime(), q2.getTime());
             return td.getTime() >= lo && td.getTime() <= hi;
           }
+          return true;
+        }
+
+        if(meta?.type === 'time'){
+          const tm = parseTimeToMinutes(rawVal);
+          if(tm === null) return false;
+
+          if(f.op === 'eq'){
+            const q = parseTimeToMinutes(f.values[0]);
+            return q === null ? true : tm === q;
+          }
+          if(f.op === 'lt'){
+            const q = parseTimeToMinutes(f.values[0]);
+            return q === null ? true : tm < q;
+          }
+          if(f.op === 'gt'){
+            const q = parseTimeToMinutes(f.values[0]);
+            return q === null ? true : tm > q;
+          }
+          if(f.op === 'between'){
+            const q1 = parseTimeToMinutes(f.values[0]);
+            const q2 = parseTimeToMinutes(f.values[1]);
+            if(q1 === null && q2 === null) return true;
+            if(q1 !== null && q2 === null) return tm >= q1;
+            if(q1 === null && q2 !== null) return tm <= q2;
+            const lo = Math.min(q1, q2);
+            const hi = Math.max(q1, q2);
+            return tm >= lo && tm <= hi;
+          }
+          // fallback contains for time strings
+          const v = String(rawVal ?? '');
+          if(f.op === 'contains') return f.values.some(x => v.includes(String(x)));
           return true;
         }
 
@@ -1898,6 +1990,33 @@ function normalizeTradeDates(trade){
   if('hold_mins' in t) t.hold_mins = normalizeInt(t.hold_mins);
   return t;
 }
+
+  // Consistent date/time parse helpers for filtering
+  function parseDateToUTC(s){
+    const norm = normalizeDateString(s);
+    if(!norm || norm.length < 10) return null;
+    const parts = norm.split('-');
+    if(parts.length !== 3) return null;
+    const y = Number(parts[0]);
+    const m = Number(parts[1]);
+    const d = Number(parts[2]);
+    if(!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return Number.isFinite(dt.getTime()) ? dt : null;
+  }
+
+  function parseTimeToMinutes(s){
+    const norm = normalizeTimeString(s);
+    if(!norm) return null;
+    if(/^\d{2}:\d{2}$/.test(norm)){
+      const [hh, mm] = norm.split(':').map(Number);
+      if(Number.isFinite(hh) && Number.isFinite(mm)) return hh * 60 + mm;
+      return null;
+    }
+    const n = Number(norm);
+    if(Number.isFinite(n)) return Math.round(n);
+    return null;
+  }
 
 
   // =====================
@@ -3656,6 +3775,34 @@ function normalizeTradeDates(trade){
       sanitizeFiltersForField('timeframe');
       assert(filters[0].values.length === 0, 'sanitize should remove invalid select value');
       ok('sanitizeFiltersForField');
+
+      // Date filter tests
+      filters = [{ field:'entry_date', op:'after', values:['2025-12-13'] }];
+      applyAdvancedFilter();
+      assert(filteredTrades.length === 2, 'date after should keep 2 (14th)');
+
+      filters = [{ field:'entry_date', op:'before', values:['2025-12-14'] }];
+      applyAdvancedFilter();
+      assert(filteredTrades.length === 1 && filteredTrades[0].entry_date === '2025-12-13', 'date before should keep only 13th');
+
+      filters = [{ field:'entry_date', op:'between', values:['2025-12-13','2025-12-14'] }];
+      applyAdvancedFilter();
+      assert(filteredTrades.length === 3, 'date between inclusive should keep 3');
+      ok('filter date ops');
+
+      // Time filter tests
+      filters = [{ field:'entry_time', op:'gt', values:['11:00'] }];
+      applyAdvancedFilter();
+      assert(filteredTrades.length === 2, 'time gt 11:00 should keep 11:10 and 21:35');
+
+      filters = [{ field:'entry_time', op:'lt', values:['11:00'] }];
+      applyAdvancedFilter();
+      assert(filteredTrades.length === 1 && filteredTrades[0].entry_time === '10:05', 'time lt 11:00 should keep only 10:05');
+
+      filters = [{ field:'entry_time', op:'between', values:['10:00','12:00'] }];
+      applyAdvancedFilter();
+      assert(filteredTrades.length === 2, 'time between 10:00-12:00 should keep 10:05 and 11:10');
+      ok('filter time ops');
 
       console.log('All self-tests passed.');
       alert('Self-tests passed. (See console)');
